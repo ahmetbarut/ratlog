@@ -8,6 +8,39 @@
 //! - When filtering, the last 150 matching lines are shown.
 pub const MAX_LINES: usize = 150;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn print_version() {
+    println!("ratlog {}", VERSION);
+}
+
+fn print_help() {
+    println!(
+        r#"ratlog {} — Terminal log viewer with live filtering and tail-style follow
+
+USAGE:
+    ratlog [OPTIONS] [LOG_FILE]
+
+ARGUMENTS:
+    LOG_FILE    Log file to open (last {} lines shown). If omitted, sample logs are used.
+
+OPTIONS:
+    -h, --help      Show this message and exit
+    -V, --version   Show version and exit
+
+CONTROLS (in app):
+    / or Tab or Ctrl+F   Focus filter
+    S                    Settings (colours)
+    L or F               Toggle live mode (when viewing a file)
+    g / G                Go to first / last line
+    q or Ctrl+C          Quit
+
+https://github.com/ahmetbarut/ratlog
+"#,
+        VERSION, MAX_LINES
+    );
+}
+
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::{FutureExt, StreamExt};
 use ratatui::{
@@ -195,6 +228,7 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 /// Given file content, returns (last MAX_LINES lines, byte offset of first kept line, 1-based file line number of first line).
+#[allow(dead_code)] // used in tests
 fn parse_log_content(content: &str) -> (Vec<String>, u64, usize) {
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
@@ -235,10 +269,8 @@ fn apply_filter(lines: &[String], filter: &str, max_lines: usize) -> Vec<(usize,
 
 /// Load last MAX_LINES from file by streaming (avoids loading huge files into memory).
 /// Returns (lines, file_path, file_offset, file_line_start) where file_line_start is 1-based.
-fn load_logs() -> io::Result<(Vec<String>, Option<PathBuf>, u64, usize)> {
-    let args: Vec<String> = env::args().collect();
-    if let Some(path) = args.get(1) {
-        let path = PathBuf::from(path);
+fn load_logs(file_arg: Option<PathBuf>) -> io::Result<(Vec<String>, Option<PathBuf>, u64, usize)> {
+    if let Some(path) = file_arg {
         if !path.exists() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -282,9 +314,28 @@ fn load_logs() -> io::Result<(Vec<String>, Option<PathBuf>, u64, usize)> {
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let mut file_arg: Option<PathBuf> = None;
+    for arg in args.iter().skip(1) {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print_help();
+                std::process::exit(0);
+            }
+            "-V" | "--version" => {
+                print_version();
+                std::process::exit(0);
+            }
+            path => {
+                file_arg = Some(PathBuf::from(path));
+                break;
+            }
+        }
+    }
+
     color_eyre::install()?;
     let terminal = ratatui::init();
-    let (logs, file_path, file_offset, file_line_start) = load_logs()?;
+    let (logs, file_path, file_offset, file_line_start) = load_logs(file_arg)?;
     let result = App::new(logs, file_path, file_offset, file_line_start)
         .run(terminal)
         .await;

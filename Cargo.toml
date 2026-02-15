@@ -1,6 +1,6 @@
 [package]
 name = "ratlog"
-version = "0.1.0"
+version = "0.2.0"
 description = "Terminal log viewer with live filtering, tail-style follow and RAM display (Ratatui TUI)"
 authors = ["Ahmet Barut <ahmetbarut588@gmail.com>"]
 license = "MIT"
