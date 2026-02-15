@@ -16,10 +16,11 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Clear, HighlightSpacing, List, ListItem, ListState, Paragraph, Wrap},
 };
+use std::collections::VecDeque;
 use std::env;
 use std::fs;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -232,8 +233,8 @@ fn apply_filter(lines: &[String], filter: &str, max_lines: usize) -> Vec<(usize,
     }
 }
 
-/// Initial logs: only the last MAX_LINES lines are read from file (saves RAM).
-/// Returns (lines, file_path, file_offset, file_line_start) where file_line_start is 1-based first line number.
+/// Load last MAX_LINES from file by streaming (avoids loading huge files into memory).
+/// Returns (lines, file_path, file_offset, file_line_start) where file_line_start is 1-based.
 fn load_logs() -> io::Result<(Vec<String>, Option<PathBuf>, u64, usize)> {
     let args: Vec<String> = env::args().collect();
     if let Some(path) = args.get(1) {
@@ -244,8 +245,35 @@ fn load_logs() -> io::Result<(Vec<String>, Option<PathBuf>, u64, usize)> {
                 format!("Log file not found: {}", path.display()),
             ));
         }
-        let content = std::fs::read_to_string(&path)?;
-        let (kept, file_offset, file_line_start) = parse_log_content(&content);
+        let file = File::open(&path)?;
+        let reader = BufReader::new(file);
+        let mut deque: VecDeque<String> = VecDeque::with_capacity(MAX_LINES + 1);
+        let mut total_lines: usize = 0;
+        for line in reader.lines() {
+            let line = line?;
+            total_lines += 1;
+            deque.push_back(line);
+            if deque.len() > MAX_LINES {
+                deque.pop_front();
+            }
+        }
+        let kept: Vec<String> = deque.into_iter().collect();
+        let file_line_start = total_lines.saturating_sub(kept.len()) + 1;
+
+        // Byte offset of first kept line (for live tail)
+        let file_offset = if file_line_start <= 1 {
+            0
+        } else {
+            let f = File::open(&path)?;
+            let r = BufReader::new(f);
+            let mut offset: u64 = 0;
+            for line in r.lines().take(file_line_start - 1) {
+                let s = line?;
+                offset += s.len() as u64 + 1;
+            }
+            offset
+        };
+
         Ok((kept, Some(path), file_offset, file_line_start))
     } else {
         Ok((sample_logs(), None, 0, 1))
