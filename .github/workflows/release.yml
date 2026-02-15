@@ -69,9 +69,9 @@ jobs:
               mv "$dir/ratlog" "artifacts/${name}.bin"
             fi
           done
-          rm -rf artifacts/ratlog-*
+          for d in artifacts/ratlog-*/; do rm -rf "$d"; done
           for f in artifacts/*.bin; do
-            mv "$f" "artifacts/$(basename "$f" .bin)"
+            [[ -e "$f" ]] && mv "$f" "artifacts/$(basename "$f" .bin)"
           done
 
       - name: Create Release
