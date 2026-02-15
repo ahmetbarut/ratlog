@@ -74,7 +74,11 @@ jobs:
             [[ -e "$f" ]] && mv "$f" "artifacts/$(basename "$f" .bin)"
           done
 
+      - name: Wait for GitHub API
+        run: sleep 15
+
       - name: Create Release
+        timeout-minutes: 5
         uses: softprops/action-gh-release@v2
         with:
           draft: false
