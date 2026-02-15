@@ -66,10 +66,13 @@ jobs:
           for dir in artifacts/*/; do
             name=$(basename "$dir")
             if [[ -f "$dir/ratlog" ]]; then
-              mv "$dir/ratlog" "artifacts/$name"
+              mv "$dir/ratlog" "artifacts/${name}.bin"
             fi
-            done
-          rmdir artifacts/ratlog-* 2>/dev/null || true
+          done
+          rm -rf artifacts/ratlog-*
+          for f in artifacts/*.bin; do
+            mv "$f" "artifacts/$(basename "$f" .bin)"
+          done
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
