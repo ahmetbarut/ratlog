@@ -25,11 +25,7 @@ pub fn parse_log_content(content: &str) -> (Vec<String>, u64, usize) {
 }
 
 /// Filter lines by query (case-insensitive substring); returns at most max_lines (last N matches).
-pub fn apply_filter(
-    lines: &[String],
-    filter: &str,
-    max_lines: usize,
-) -> Vec<(usize, String)> {
+pub fn apply_filter(lines: &[String], filter: &str, max_lines: usize) -> Vec<(usize, String)> {
     let q = filter.trim().to_lowercase();
     let with_idx: Vec<(usize, String)> = if q.is_empty() {
         lines

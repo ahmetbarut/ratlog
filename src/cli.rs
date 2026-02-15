@@ -33,8 +33,7 @@ CONTROLS (in app):
 
 https://github.com/ahmetbarut/ratlog
 "#,
-        VERSION,
-        MAX_LINES
+        VERSION, MAX_LINES
     );
 }
 

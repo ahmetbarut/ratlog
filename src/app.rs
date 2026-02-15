@@ -18,9 +18,7 @@ use ratatui::{
 use crate::constants::{MAX_LINES, POLL_READ_CAP};
 use crate::logs::apply_filter;
 use crate::settings::{load_settings, save_settings};
-use crate::theme::{
-    self, AccentColor, BorderColor, Focus, StatusColor, TextColor, TextStyle,
-};
+use crate::theme::{self, AccentColor, BorderColor, Focus, StatusColor, TextColor, TextStyle};
 use crate::util::{centered_rect, current_process_memory};
 
 pub struct App {
