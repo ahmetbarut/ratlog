@@ -11,10 +11,10 @@ pub const MAX_LINES: usize = 150;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::{FutureExt, StreamExt};
 use ratatui::{
+    DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     widgets::{Block, Clear, HighlightSpacing, List, ListItem, ListState, Paragraph, Wrap},
-    DefaultTerminal, Frame,
 };
 use std::env;
 use std::fs;
@@ -41,33 +41,39 @@ struct SavedSettings {
 fn load_settings() -> (AccentColor, TextColor, TextStyle, BorderColor, StatusColor) {
     let path = match settings_path() {
         Some(p) => p,
-        None => return (
-            AccentColor::default(),
-            TextColor::default(),
-            TextStyle::default(),
-            BorderColor::default(),
-            StatusColor::default(),
-        ),
+        None => {
+            return (
+                AccentColor::default(),
+                TextColor::default(),
+                TextStyle::default(),
+                BorderColor::default(),
+                StatusColor::default(),
+            );
+        }
     };
     let s = match fs::read_to_string(&path) {
         Ok(x) => x,
-        Err(_) => return (
-            AccentColor::default(),
-            TextColor::default(),
-            TextStyle::default(),
-            BorderColor::default(),
-            StatusColor::default(),
-        ),
+        Err(_) => {
+            return (
+                AccentColor::default(),
+                TextColor::default(),
+                TextStyle::default(),
+                BorderColor::default(),
+                StatusColor::default(),
+            );
+        }
     };
     let saved: SavedSettings = match serde_json::from_str(&s) {
         Ok(x) => x,
-        Err(_) => return (
-            AccentColor::default(),
-            TextColor::default(),
-            TextStyle::default(),
-            BorderColor::default(),
-            StatusColor::default(),
-        ),
+        Err(_) => {
+            return (
+                AccentColor::default(),
+                TextColor::default(),
+                TextStyle::default(),
+                BorderColor::default(),
+                StatusColor::default(),
+            );
+        }
     };
     let parse_accent = |v: &str| {
         AccentColor::all()
@@ -164,7 +170,12 @@ fn centered_rect(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
     let h = area.height * height_pct / 100;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    Rect { x, y, width: w, height: h }
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -246,7 +257,9 @@ async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     let terminal = ratatui::init();
     let (logs, file_path, file_offset, file_line_start) = load_logs()?;
-    let result = App::new(logs, file_path, file_offset, file_line_start).run(terminal).await;
+    let result = App::new(logs, file_path, file_offset, file_line_start)
+        .run(terminal)
+        .await;
     ratatui::restore();
     result
 }
@@ -657,7 +670,11 @@ impl App {
         let log_style = self.log_text_style();
 
         // Top: filter area
-        let filter_label = if self.focus == Focus::Filter { " Filter (focus) " } else { " Filter " };
+        let filter_label = if self.focus == Focus::Filter {
+            " Filter (focus) "
+        } else {
+            " Filter "
+        };
         let block = Block::bordered()
             .title(filter_label)
             .border_style(border_style)
@@ -704,7 +721,11 @@ impl App {
             self.all_lines.len(),
             live_tag,
             mem,
-            if self.filter.is_empty() { "(none)" } else { self.filter.as_str() }
+            if self.filter.is_empty() {
+                "(none)"
+            } else {
+                self.filter.as_str()
+            }
         );
         let status_para = Paragraph::new(status).style(self.status_style());
         frame.render_widget(status_para, chunks[2]);
@@ -718,15 +739,28 @@ impl App {
     fn draw_settings(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let items = [
-            ListItem::new(format!(" Accent (focus/highlight): {}  (←/→) ", self.accent_color.name())),
+            ListItem::new(format!(
+                " Accent (focus/highlight): {}  (←/→) ",
+                self.accent_color.name()
+            )),
             ListItem::new(format!(" Text colour: {}  (←/→) ", self.text_color.name())),
             ListItem::new(format!(" Text style: {}  (←/→) ", self.text_style.name())),
-            ListItem::new(format!(" Border colour: {}  (←/→) ", self.border_color.name())),
-            ListItem::new(format!(" Status bar colour: {}  (←/→) ", self.status_color.name())),
+            ListItem::new(format!(
+                " Border colour: {}  (←/→) ",
+                self.border_color.name()
+            )),
+            ListItem::new(format!(
+                " Status bar colour: {}  (←/→) ",
+                self.status_color.name()
+            )),
             ListItem::new(" Back (Enter or Esc) "),
         ];
         let list = List::new(items)
-            .block(Block::bordered().title(" Settings ").style(self.accent_style()))
+            .block(
+                Block::bordered()
+                    .title(" Settings ")
+                    .style(self.accent_style()),
+            )
             .highlight_style(Style::default().reversed())
             .highlight_symbol(" ▸ ")
             .highlight_spacing(HighlightSpacing::Always);
@@ -785,7 +819,8 @@ impl App {
             return;
         }
         match (key.modifiers, key.code) {
-            (_, KeyCode::Char('q')) | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => {
+            (_, KeyCode::Char('q'))
+            | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => {
                 self.quit();
                 return;
             }
@@ -820,7 +855,10 @@ impl App {
                     match i {
                         0 => {
                             let opts = AccentColor::all();
-                            let idx = opts.iter().position(|&c| c == self.accent_color).unwrap_or(0);
+                            let idx = opts
+                                .iter()
+                                .position(|&c| c == self.accent_color)
+                                .unwrap_or(0);
                             self.accent_color = opts[cycle_next(idx, opts.len())];
                         }
                         1 => {
@@ -835,12 +873,18 @@ impl App {
                         }
                         3 => {
                             let opts = BorderColor::all();
-                            let idx = opts.iter().position(|&c| c == self.border_color).unwrap_or(0);
+                            let idx = opts
+                                .iter()
+                                .position(|&c| c == self.border_color)
+                                .unwrap_or(0);
                             self.border_color = opts[cycle_next(idx, opts.len())];
                         }
                         4 => {
                             let opts = StatusColor::all();
-                            let idx = opts.iter().position(|&c| c == self.status_color).unwrap_or(0);
+                            let idx = opts
+                                .iter()
+                                .position(|&c| c == self.status_color)
+                                .unwrap_or(0);
                             self.status_color = opts[cycle_next(idx, opts.len())];
                         }
                         _ => {}
@@ -867,7 +911,10 @@ impl App {
                 match i {
                     0 => {
                         let opts = AccentColor::all();
-                        let idx = opts.iter().position(|&c| c == self.accent_color).unwrap_or(0);
+                        let idx = opts
+                            .iter()
+                            .position(|&c| c == self.accent_color)
+                            .unwrap_or(0);
                         self.accent_color = opts[cycle_prev(idx, opts.len())];
                     }
                     1 => {
@@ -882,12 +929,18 @@ impl App {
                     }
                     3 => {
                         let opts = BorderColor::all();
-                        let idx = opts.iter().position(|&c| c == self.border_color).unwrap_or(0);
+                        let idx = opts
+                            .iter()
+                            .position(|&c| c == self.border_color)
+                            .unwrap_or(0);
                         self.border_color = opts[cycle_prev(idx, opts.len())];
                     }
                     4 => {
                         let opts = StatusColor::all();
-                        let idx = opts.iter().position(|&c| c == self.status_color).unwrap_or(0);
+                        let idx = opts
+                            .iter()
+                            .position(|&c| c == self.status_color)
+                            .unwrap_or(0);
                         self.status_color = opts[cycle_prev(idx, opts.len())];
                     }
                     _ => {}
@@ -901,7 +954,10 @@ impl App {
                 match i {
                     0 => {
                         let opts = AccentColor::all();
-                        let idx = opts.iter().position(|&c| c == self.accent_color).unwrap_or(0);
+                        let idx = opts
+                            .iter()
+                            .position(|&c| c == self.accent_color)
+                            .unwrap_or(0);
                         self.accent_color = opts[cycle_next(idx, opts.len())];
                     }
                     1 => {
@@ -916,12 +972,18 @@ impl App {
                     }
                     3 => {
                         let opts = BorderColor::all();
-                        let idx = opts.iter().position(|&c| c == self.border_color).unwrap_or(0);
+                        let idx = opts
+                            .iter()
+                            .position(|&c| c == self.border_color)
+                            .unwrap_or(0);
                         self.border_color = opts[cycle_next(idx, opts.len())];
                     }
                     4 => {
                         let opts = StatusColor::all();
-                        let idx = opts.iter().position(|&c| c == self.status_color).unwrap_or(0);
+                        let idx = opts
+                            .iter()
+                            .position(|&c| c == self.status_color)
+                            .unwrap_or(0);
                         self.status_color = opts[cycle_next(idx, opts.len())];
                     }
                     _ => {}
@@ -985,7 +1047,10 @@ impl App {
             (_, KeyCode::Tab) => {
                 self.focus = Focus::Filter;
             }
-            (_, KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Char('f') | KeyCode::Char('F')) => {
+            (
+                _,
+                KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Char('f') | KeyCode::Char('F'),
+            ) => {
                 if self.live_file_path.is_some() {
                     self.live = !self.live;
                 }
@@ -1053,7 +1118,10 @@ mod tests {
     #[test]
     fn test_parse_log_content_last_max_lines() {
         let n = MAX_LINES + 50;
-        let content = (0..n).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let content = (0..n)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
         let (lines, _offset, start) = parse_log_content(&content);
         assert_eq!(lines.len(), MAX_LINES);
         assert_eq!(start, 51); // 1-based first kept line
@@ -1094,12 +1162,22 @@ mod tests {
         let logs = sample_logs();
         assert!(!logs.is_empty());
         assert!(logs.len() <= MAX_LINES);
-        assert!(logs[0].contains("INFO") || logs[0].contains("DEBUG") || logs[0].contains("WARN") || logs[0].contains("ERROR"));
+        assert!(
+            logs[0].contains("INFO")
+                || logs[0].contains("DEBUG")
+                || logs[0].contains("WARN")
+                || logs[0].contains("ERROR")
+        );
     }
 
     #[test]
     fn test_centered_rect() {
-        let area = Rect { x: 0, y: 0, width: 100, height: 20 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 20,
+        };
         let r = centered_rect(area, 50, 50);
         assert_eq!(r.width, 50);
         assert_eq!(r.height, 10);
