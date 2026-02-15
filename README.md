@@ -4,11 +4,19 @@ A [Ratatui] TUI application to open log files in the terminal with **live text f
 
 ## Installation
 
-**From source (recommended):**
+**One-line install (curl):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ahmetbarut/ratlog/main/install.sh | bash
+```
+
+The script first tries to download a **pre-built binary** from [GitHub Releases](https://github.com/ahmetbarut/ratlog/releases) (no Rust needed). If none exists for your platform, it falls back to building from source (requires [Rust](https://rustup.rs) and git). Binary is installed to `~/.local/bin` by default; set `RATLOG_INSTALL_DIR` to override.
+
+**From source:**
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ratlog.git
+git clone https://github.com/ahmetbarut/ratlog.git
 cd ratlog
 
 # Option 1: Use the install script
@@ -50,6 +58,23 @@ cargo build --release
 ```bash
 cargo build
 cargo build --release
+```
+
+## Tests
+
+```bash
+cargo test
+```
+
+Unit tests cover: `format_bytes`, log content parsing (`parse_log_content`), filter logic (`apply_filter`), sample logs, centered layout, and settings JSON roundtrip.
+
+## Releasing
+
+Push a version tag to trigger a [GitHub Actions release](.github/workflows/release.yml). The workflow builds binaries for **linux-x86_64**, **linux-aarch64**, **darwin-x86_64**, and **darwin-aarch64** and uploads them to [GitHub Releases](https://github.com/ahmetbarut/ratlog/releases). The curl install script downloads the matching asset by name (e.g. `ratlog-darwin-aarch64`).
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 ## Usage

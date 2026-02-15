@@ -182,6 +182,45 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Given file content, returns (last MAX_LINES lines, byte offset of first kept line, 1-based file line number of first line).
+fn parse_log_content(content: &str) -> (Vec<String>, u64, usize) {
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+    let skip = total.saturating_sub(MAX_LINES);
+    let file_line_start = skip + 1;
+    let kept: Vec<String> = lines[skip..].iter().map(|s| s.to_string()).collect();
+    let file_offset = content
+        .lines()
+        .take(skip)
+        .map(|l| l.len() + 1)
+        .sum::<usize>() as u64;
+    (kept, file_offset, file_line_start)
+}
+
+/// Filter lines by query (case-insensitive substring); returns at most max_lines (last N matches). Returns (index_in_original, line).
+fn apply_filter(lines: &[String], filter: &str, max_lines: usize) -> Vec<(usize, String)> {
+    let q = filter.trim().to_lowercase();
+    let with_idx: Vec<(usize, String)> = if q.is_empty() {
+        lines
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i, s.clone()))
+            .collect()
+    } else {
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.to_lowercase().contains(&q))
+            .map(|(i, s)| (i, s.clone()))
+            .collect()
+    };
+    if with_idx.len() <= max_lines {
+        with_idx
+    } else {
+        with_idx[with_idx.len() - max_lines..].to_vec()
+    }
+}
+
 /// Initial logs: only the last MAX_LINES lines are read from file (saves RAM).
 /// Returns (lines, file_path, file_offset, file_line_start) where file_line_start is 1-based first line number.
 fn load_logs() -> io::Result<(Vec<String>, Option<PathBuf>, u64, usize)> {
@@ -195,16 +234,7 @@ fn load_logs() -> io::Result<(Vec<String>, Option<PathBuf>, u64, usize)> {
             ));
         }
         let content = std::fs::read_to_string(&path)?;
-        let lines: Vec<&str> = content.lines().collect();
-        let total = lines.len();
-        let skip = total.saturating_sub(MAX_LINES);
-        let file_line_start = skip + 1; // 1-based
-        let kept: Vec<String> = lines[skip..].iter().map(|s| s.to_string()).collect();
-        let file_offset = content
-            .lines()
-            .take(skip)
-            .map(|l| l.len() + 1)
-            .sum::<usize>() as u64;
+        let (kept, file_offset, file_line_start) = parse_log_content(&content);
         Ok((kept, Some(path), file_offset, file_line_start))
     } else {
         Ok((sample_logs(), None, 0, 1))
@@ -589,26 +619,7 @@ impl App {
 
     /// Returns (all_lines_index, line) for display; used to show file line numbers. Index is 0-based in all_lines.
     fn filtered_lines_with_indices(&self) -> Vec<(usize, String)> {
-        let q = self.filter.trim().to_lowercase();
-        let with_idx: Vec<(usize, String)> = if q.is_empty() {
-            self.all_lines
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (i, s.clone()))
-                .collect()
-        } else {
-            self.all_lines
-                .iter()
-                .enumerate()
-                .filter(|(_, line)| line.to_lowercase().contains(&q))
-                .map(|(i, s)| (i, s.clone()))
-                .collect()
-        };
-        if with_idx.len() <= MAX_LINES {
-            with_idx
-        } else {
-            with_idx[with_idx.len() - MAX_LINES..].to_vec()
-        }
+        apply_filter(&self.all_lines, &self.filter, MAX_LINES)
     }
 
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
@@ -1003,5 +1014,114 @@ impl App {
 
     fn quit(&mut self) {
         self.running = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1 KiB");
+        assert_eq!(format_bytes(1536), "1 KiB");
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MiB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GiB");
+        assert_eq!(format_bytes(1536 * 1024 * 1024), "1.5 GiB");
+    }
+
+    #[test]
+    fn test_parse_log_content_empty() {
+        let (lines, offset, start) = parse_log_content("");
+        assert!(lines.is_empty());
+        assert_eq!(offset, 0);
+        assert_eq!(start, 1);
+    }
+
+    #[test]
+    fn test_parse_log_content_one_line() {
+        let (lines, offset, start) = parse_log_content("hello\n");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "hello");
+        assert_eq!(offset, 0);
+        assert_eq!(start, 1);
+    }
+
+    #[test]
+    fn test_parse_log_content_last_max_lines() {
+        let n = MAX_LINES + 50;
+        let content = (0..n).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let (lines, _offset, start) = parse_log_content(&content);
+        assert_eq!(lines.len(), MAX_LINES);
+        assert_eq!(start, 51); // 1-based first kept line
+        assert_eq!(lines[0], "line 50");
+        assert_eq!(lines[MAX_LINES - 1], format!("line {}", n - 1));
+    }
+
+    #[test]
+    fn test_apply_filter_empty_query_returns_all() {
+        let lines = vec!["a".into(), "b".into(), "c".into()];
+        let out = apply_filter(&lines, "", 10);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0], (0, "a".to_string()));
+        assert_eq!(out[1], (1, "b".to_string()));
+        assert_eq!(out[2], (2, "c".to_string()));
+    }
+
+    #[test]
+    fn test_apply_filter_matching_case_insensitive() {
+        let lines = vec!["INFO foo".into(), "ERROR bar".into(), "info baz".into()];
+        let out = apply_filter(&lines, "info", 10);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], (0, "INFO foo".to_string()));
+        assert_eq!(out[1], (2, "info baz".to_string()));
+    }
+
+    #[test]
+    fn test_apply_filter_cap_max_lines() {
+        let lines: Vec<String> = (0..20).map(|i| format!("x {}", i)).collect();
+        let out = apply_filter(&lines, "x", 5);
+        assert_eq!(out.len(), 5);
+        assert_eq!(out[0].1, "x 15");
+        assert_eq!(out[4].1, "x 19");
+    }
+
+    #[test]
+    fn test_sample_logs_non_empty() {
+        let logs = sample_logs();
+        assert!(!logs.is_empty());
+        assert!(logs.len() <= MAX_LINES);
+        assert!(logs[0].contains("INFO") || logs[0].contains("DEBUG") || logs[0].contains("WARN") || logs[0].contains("ERROR"));
+    }
+
+    #[test]
+    fn test_centered_rect() {
+        let area = Rect { x: 0, y: 0, width: 100, height: 20 };
+        let r = centered_rect(area, 50, 50);
+        assert_eq!(r.width, 50);
+        assert_eq!(r.height, 10);
+        assert_eq!(r.x, 25);
+        assert_eq!(r.y, 5);
+    }
+
+    #[test]
+    fn test_saved_settings_roundtrip() {
+        let saved = SavedSettings {
+            accent: "Cyan".to_string(),
+            text_color: "White".to_string(),
+            text_style: "Normal".to_string(),
+            border_color: "Gray".to_string(),
+            status_color: "Gray".to_string(),
+        };
+        let s = serde_json::to_string_pretty(&saved).unwrap();
+        let loaded: SavedSettings = serde_json::from_str(&s).unwrap();
+        assert_eq!(loaded.accent, saved.accent);
+        assert_eq!(loaded.text_color, saved.text_color);
+        assert_eq!(loaded.text_style, saved.text_style);
+        assert_eq!(loaded.border_color, saved.border_color);
+        assert_eq!(loaded.status_color, saved.status_color);
     }
 }
