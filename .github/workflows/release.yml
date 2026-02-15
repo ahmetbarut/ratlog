@@ -70,25 +70,21 @@ jobs:
         with:
           path: artifacts
 
+      - name: Flatten artifact names for release
+        run: |
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            if [[ -f "$dir/ratlog" ]]; then
+              mv "$dir/ratlog" "artifacts/$name"
+            fi
+            done
+          rmdir artifacts/ratlog-* 2>/dev/null || true
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           generate_release_notes: true
-          files: artifacts/*/ratlog
+          files: artifacts/ratlog-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Rename files: artifact name is the dir, we want ratlog -> $artifact_name
-      - name: List artifact dirs
-        run: |
-          for dir in artifacts/*/; do
-            name=$(basename "$dir")
-            if [[ -f "$dir/ratlog" ]]; then
-              cp "$dir/ratlog" "artifacts/$name"
-            fi
-            done
-        # Actually softprops/action-gh-release uploads files from a path - so we need to give it files named ratlog-linux-x86_64 etc. Let me check: we upload with name = matrix.asset, so the artifact is in artifacts/ratlog-linux-x86_64/ratlog. So we need to copy each artifacts/ratlog-*/ratlog to artifacts/ratlog-* (no subdir). Let me fix the release step to upload the right paths. So: after download, we have artifacts/ratlog-linux-x86_64/ratlog, etc. We want to upload file named ratlog-linux-x86_64 containing the binary. The action-gh-release "files" glob - if we pass "artifacts/*/ratlog" it might use the path as the name. Let me check the doc - it says "files with optional label". So we need to have files like artifacts/ratlog-linux-x86_64 (the binary renamed). So in a step we do: for d in artifacts/*/; do n=basename $d; mv $d/ratlog $d/../$n; done; then rm -rf artifacts/ratlog-*/ and we have artifacts/ratlog-linux-x86_64 etc. So "files: artifacts/*" would upload them with their names. Let me add a step to flatten and rename.
-</think>
-Workflow'daki release adımını düzeltiyorum: artifact'lar `artifacts/<asset_name>/ratlog` şeklinde indiriliyor; release'e yüklerken dosya adı `ratlog-linux-x86_64` olmalı.
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
-StrReplace

@@ -8,6 +8,15 @@
 //! - When filtering, the last 150 matching lines are shown.
 pub const MAX_LINES: usize = 150;
 
+/// Max bytes per line when reading; avoids OOM on files with one huge line.
+const MAX_LINE_LEN: usize = 64 * 1024; // 64 KiB
+
+/// Max bytes to read per poll in live mode.
+const POLL_READ_CAP: usize = 512 * 1024; // 512 KiB
+
+/// When file is larger than this, we only read the last TAIL_READ_SIZE bytes (no full-file stream).
+const TAIL_READ_SIZE: u64 = 2 * 1024 * 1024; // 2 MiB
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn print_version() {
@@ -267,8 +276,129 @@ fn apply_filter(lines: &[String], filter: &str, max_lines: usize) -> Vec<(usize,
     }
 }
 
-/// Load last MAX_LINES from file by streaming (avoids loading huge files into memory).
-/// Returns (lines, file_path, file_offset, file_line_start) where file_line_start is 1-based.
+/// Read next line with a max length to avoid OOM on huge lines. Skips bytes beyond MAX_LINE_LEN until newline.
+fn read_line_bounded<R: BufRead>(r: &mut R) -> io::Result<Option<String>> {
+    let mut buf = Vec::with_capacity(4096.min(MAX_LINE_LEN));
+    let mut total = 0usize;
+    loop {
+        let (consume_amt, done, skip_until_newline) = {
+            let chunk = r.fill_buf()?;
+            if chunk.is_empty() {
+                break;
+            }
+            let mut found = None;
+            for (i, &b) in chunk.iter().enumerate() {
+                if b == b'\n' {
+                    found = Some(i);
+                    break;
+                }
+                if total + i >= MAX_LINE_LEN {
+                    break;
+                }
+            }
+            match found {
+                Some(i) => {
+                    buf.extend_from_slice(&chunk[..=i]);
+                    (i + 1, true, false)
+                }
+                None if total + chunk.len() >= MAX_LINE_LEN => {
+                    let take = (MAX_LINE_LEN - total).min(chunk.len());
+                    buf.extend_from_slice(&chunk[..take]);
+                    (take, true, true)
+                }
+                None => {
+                    buf.extend_from_slice(chunk);
+                    (chunk.len(), false, false)
+                }
+            }
+        };
+        r.consume(consume_amt);
+        if done {
+            if skip_until_newline {
+                loop {
+                    let (to_consume, found_newline) = {
+                        let c = r.fill_buf()?;
+                        if c.is_empty() {
+                            (0, true)
+                        } else {
+                            match c.iter().position(|&b| b == b'\n') {
+                                Some(pos) => (pos + 1, true),
+                                None => (c.len(), false),
+                            }
+                        }
+                    };
+                    r.consume(to_consume);
+                    if found_newline {
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        total += consume_amt;
+    }
+    if buf.is_empty() {
+        return Ok(None);
+    }
+    let s = String::from_utf8_lossy(&buf)
+        .trim_end_matches('\n')
+        .to_string();
+    Ok(Some(s))
+}
+
+/// Byte offset after the first (n - 1) newlines (without loading full lines).
+fn offset_after_n_newlines(path: &PathBuf, n: usize) -> io::Result<u64> {
+    if n == 0 {
+        return Ok(0);
+    }
+    let f = File::open(path)?;
+    let mut r = BufReader::new(f);
+    let mut offset: u64 = 0;
+    let mut newlines_seen: usize = 0;
+    let mut chunk = [0u8; 65536];
+    loop {
+        let nread = r.read(&mut chunk)?;
+        if nread == 0 {
+            break;
+        }
+        for (i, &b) in chunk[..nread].iter().enumerate() {
+            if b == b'\n' {
+                newlines_seen += 1;
+                if newlines_seen == n {
+                    return Ok(offset + i as u64 + 1);
+                }
+            }
+        }
+        offset += nread as u64;
+    }
+    Ok(offset)
+}
+
+/// Parse tail content (may start with partial line after newline) into lines; each line capped at MAX_LINE_LEN.
+fn parse_tail_lines(mut content: &[u8]) -> Vec<String> {
+    if let Some(first_nl) = content.iter().position(|&b| b == b'\n') {
+        content = &content[first_nl + 1..];
+    }
+    let mut lines = Vec::new();
+    for line in content.split(|&b| b == b'\n') {
+        let s = String::from_utf8_lossy(line).to_string();
+        let truncated = if s.len() > MAX_LINE_LEN {
+            format!("{}...", &s[..MAX_LINE_LEN])
+        } else {
+            s
+        };
+        if !truncated.is_empty() {
+            lines.push(truncated);
+        }
+    }
+    if lines.len() > MAX_LINES {
+        lines[lines.len() - MAX_LINES..].to_vec()
+    } else {
+        lines
+    }
+}
+
+/// Load last MAX_LINES from file. For large files, only reads the last TAIL_READ_SIZE bytes (no full scan).
 fn load_logs(file_arg: Option<PathBuf>) -> io::Result<(Vec<String>, Option<PathBuf>, u64, usize)> {
     if let Some(path) = file_arg {
         if !path.exists() {
@@ -277,12 +407,31 @@ fn load_logs(file_arg: Option<PathBuf>) -> io::Result<(Vec<String>, Option<PathB
                 format!("Log file not found: {}", path.display()),
             ));
         }
+        let meta = fs::metadata(&path)?;
+        let file_size = meta.len();
+
+        if file_size > TAIL_READ_SIZE {
+            // Large file: read only the last TAIL_READ_SIZE bytes (no full-file scan)
+            let mut file = File::open(&path)?;
+            let start = file_size.saturating_sub(TAIL_READ_SIZE);
+            file.seek(SeekFrom::Start(start))?;
+            let cap = TAIL_READ_SIZE.min(usize::MAX as u64) as usize;
+            let mut buf = Vec::with_capacity(cap);
+            let mut limited = (&mut file).take(TAIL_READ_SIZE);
+            let _ = limited.read_to_end(&mut buf);
+            buf.truncate(buf.len().min(cap));
+            let kept = parse_tail_lines(&buf);
+            let file_offset = file_size; // next poll reads from current end of file
+            let file_line_start = 1;
+            return Ok((kept, Some(path), file_offset, file_line_start));
+        }
+
+        // Small file: stream from start
         let file = File::open(&path)?;
-        let reader = BufReader::new(file);
+        let mut reader = BufReader::new(file);
         let mut deque: VecDeque<String> = VecDeque::with_capacity(MAX_LINES + 1);
         let mut total_lines: usize = 0;
-        for line in reader.lines() {
-            let line = line?;
+        while let Some(line) = read_line_bounded(&mut reader)? {
             total_lines += 1;
             deque.push_back(line);
             if deque.len() > MAX_LINES {
@@ -292,18 +441,10 @@ fn load_logs(file_arg: Option<PathBuf>) -> io::Result<(Vec<String>, Option<PathB
         let kept: Vec<String> = deque.into_iter().collect();
         let file_line_start = total_lines.saturating_sub(kept.len()) + 1;
 
-        // Byte offset of first kept line (for live tail)
         let file_offset = if file_line_start <= 1 {
             0
         } else {
-            let f = File::open(&path)?;
-            let r = BufReader::new(f);
-            let mut offset: u64 = 0;
-            for line in r.lines().take(file_line_start - 1) {
-                let s = line?;
-                offset += s.len() as u64 + 1;
-            }
-            offset
+            offset_after_n_newlines(&path, file_line_start - 1)?
         };
 
         Ok((kept, Some(path), file_offset, file_line_start))
@@ -315,23 +456,19 @@ fn load_logs(file_arg: Option<PathBuf>) -> io::Result<(Vec<String>, Option<PathB
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let mut file_arg: Option<PathBuf> = None;
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                print_help();
-                std::process::exit(0);
-            }
-            "-V" | "--version" => {
-                print_version();
-                std::process::exit(0);
-            }
-            path => {
-                file_arg = Some(PathBuf::from(path));
-                break;
-            }
-        }
+    if args.iter().skip(1).any(|a| a == "-h" || a == "--help") {
+        print_help();
+        std::process::exit(0);
     }
+    if args.iter().skip(1).any(|a| a == "-V" || a == "--version") {
+        print_version();
+        std::process::exit(0);
+    }
+    let file_arg = args
+        .iter()
+        .skip(1)
+        .find(|a| *a != "-h" && *a != "--help" && *a != "-V" && *a != "--version")
+        .map(|s| PathBuf::from(s.as_str()));
 
     color_eyre::install()?;
     let terminal = ratatui::init();
@@ -370,19 +507,14 @@ enum Focus {
     LogList,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum AccentColor {
+    #[default]
     Cyan,
     Green,
     Yellow,
     Magenta,
     Blue,
-}
-
-impl Default for AccentColor {
-    fn default() -> Self {
-        AccentColor::Cyan
-    }
 }
 
 impl AccentColor {
@@ -416,19 +548,14 @@ impl AccentColor {
 }
 
 /// Text colour for log lines (and other UI text where applicable).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum TextColor {
+    #[default]
     White,
     Gray,
     Cyan,
     Green,
     Yellow,
-}
-
-impl Default for TextColor {
-    fn default() -> Self {
-        TextColor::White
-    }
 }
 
 impl TextColor {
@@ -461,17 +588,12 @@ impl TextColor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum TextStyle {
+    #[default]
     Normal,
     Bold,
     Dim,
-}
-
-impl Default for TextStyle {
-    fn default() -> Self {
-        TextStyle::Normal
-    }
 }
 
 impl TextStyle {
@@ -494,17 +616,12 @@ impl TextStyle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum BorderColor {
     White,
+    #[default]
     Gray,
     DarkGray,
-}
-
-impl Default for BorderColor {
-    fn default() -> Self {
-        BorderColor::Gray
-    }
 }
 
 impl BorderColor {
@@ -527,17 +644,12 @@ impl BorderColor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum StatusColor {
+    #[default]
     Gray,
     DarkGray,
     White,
-}
-
-impl Default for StatusColor {
-    fn default() -> Self {
-        StatusColor::Gray
-    }
 }
 
 impl StatusColor {
@@ -616,7 +728,7 @@ impl App {
             list_state,
             live: false,
             live_file_path,
-            live_file_offset: live_file_offset,
+            live_file_offset,
             live_partial: String::new(),
             file_line_start,
             show_settings: false,
@@ -668,14 +780,12 @@ impl App {
             Err(_) => return,
         };
         let _ = file.seek(SeekFrom::Start(self.live_file_offset));
-        let mut buf = Vec::new();
-        if file.read_to_end(&mut buf).is_err() {
+        let mut buf = Vec::with_capacity(POLL_READ_CAP);
+        let mut limited = (&mut file).take(POLL_READ_CAP as u64);
+        if limited.read_to_end(&mut buf).is_err() {
             return;
         }
-        let new_len = match file.stream_position() {
-            Ok(n) => n,
-            Err(_) => self.live_file_offset + buf.len() as u64,
-        };
+        let new_len = self.live_file_offset + buf.len() as u64;
         if buf.is_empty() {
             return;
         }
@@ -762,7 +872,7 @@ impl App {
             } else {
                 Style::default()
             });
-        let filter_display = format!("{}", self.filter);
+        let filter_display = self.filter.to_string();
         let cursor_pos = self.filter_cursor.min(filter_display.len());
         let para = Paragraph::new(filter_display.as_str())
             .block(block)
