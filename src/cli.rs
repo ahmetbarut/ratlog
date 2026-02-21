@@ -4,8 +4,10 @@ use std::path::PathBuf;
 
 use crate::constants::MAX_LINES;
 
-const VERSION: &str =
-    option_env!("RATLOG_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+const VERSION: &str = match option_env!("RATLOG_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 #[derive(Debug)]
 pub enum CliAction {
