@@ -75,16 +75,16 @@ jobs:
           done
 
       - name: Wait for GitHub API
-        run: sleep 15
+        run: sleep 60
 
       - name: Create Release
-        timeout-minutes: 5
+        timeout-minutes: 10
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           draft: false
-          generate_release_notes: true
+          generate_release_notes: false
           files: artifacts/ratlog-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
