@@ -124,7 +124,7 @@ if [[ -n "$PLATFORM" ]]; then
 fi
 
 # Fallback: clone and build from source
-REPO_CLONE="${RATLOG_REPO}.git"
+REPO_CLONE="${REPO}.git"
 echo "Cloning from $REPO_CLONE ($BRANCH)..."
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
