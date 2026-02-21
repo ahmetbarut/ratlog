@@ -17,6 +17,7 @@ use ratatui::{
 
 use crate::constants::{MAX_LINES, POLL_READ_CAP};
 use crate::logs::apply_filter;
+use crate::login;
 use crate::settings::{load_settings, save_settings};
 use crate::theme::{self, AccentColor, BorderColor, Focus, StatusColor, TextColor, TextStyle};
 use crate::util::{centered_rect, current_process_memory};
@@ -41,6 +42,10 @@ pub struct App {
     text_style: TextStyle,
     border_color: BorderColor,
     status_color: StatusColor,
+    pending_share: bool,
+    share_message: Option<String>,
+    show_share_confirm: bool,
+    share_is_public: bool,
 }
 
 impl App {
@@ -80,6 +85,10 @@ impl App {
             text_style,
             border_color,
             status_color,
+            pending_share: false,
+            share_message: None,
+            show_share_confirm: false,
+            share_is_public: false,
         }
     }
 
@@ -164,6 +173,22 @@ impl App {
 
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         while self.running {
+            if self.pending_share {
+                self.pending_share = false;
+                let content = self.all_lines.join("\n");
+                let is_public = self.share_is_public;
+                match login::share_log(&content, is_public).await {
+                    Ok(res) => {
+                        let url = res.view_url.as_deref().unwrap_or(&res.url);
+                        self.share_message =
+                            Some(format!("Paylaşıldı!\n\n{}\n\n(Herhangi bir tuşa basın)", url));
+                    }
+                    Err(e) => {
+                        self.share_message =
+                            Some(format!("Hata: {}\n\n(Herhangi bir tuşa basın)", e));
+                    }
+                }
+            }
             terminal.draw(|frame| self.draw(frame))?;
             if self.live {
                 self.poll_live_file();
@@ -176,6 +201,14 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         if self.show_settings {
             self.draw_settings(frame);
+            return;
+        }
+        if let Some(msg) = self.share_message.clone() {
+            self.draw_share_overlay(frame, &msg);
+            return;
+        }
+        if self.show_share_confirm {
+            self.draw_share_confirm(frame);
             return;
         }
         let area = frame.area();
@@ -240,7 +273,7 @@ impl App {
         let live_tag = if self.live { " LIVE " } else { "" };
         let mem = current_process_memory();
         let status = format!(
-            " {} / {} lines {} |  RAM: {}  |  Filter: \"{}\"  |  Tab/ /: filter  |  L: live  |  S: settings  |  q/Esc: quit ",
+            " {} / {} lines {} |  RAM: {}  |  Filter: \"{}\"  |  Tab/ /: filter  |  L: live  |  S: settings  |  P: paylaş  |  q/Esc: quit ",
             filtered_with_idx.len(),
             self.all_lines.len(),
             live_tag,
@@ -254,9 +287,42 @@ impl App {
         let status_para = Paragraph::new(status).style(self.status_style());
         frame.render_widget(status_para, chunks[2]);
 
-        let bottom_hint = " g: en üst  │  G: en alt ";
+        let bottom_hint = " g: en üst  │  G: en alt  │  P: paylaş ";
         let hint_para = Paragraph::new(bottom_hint).style(self.status_style());
         frame.render_widget(hint_para, chunks[3]);
+    }
+
+    fn draw_share_confirm(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+        let block_area = centered_rect(area, 56, 16);
+        frame.render_widget(Clear, block_area);
+        let visibility = if self.share_is_public { "Public" } else { "Private" };
+        let text = format!(
+            "Logları Ratlog Web'e paylaşmak istiyor musunuz?\n\n  Görünürlük: {}  (←/→ veya P/U)\n\n  [E]vet (Enter)   [H]ayır (Esc)",
+            visibility
+        );
+        let block = Block::bordered()
+            .title(" Paylaş ")
+            .border_style(self.border_style())
+            .style(self.accent_style());
+        let inner = block.inner(block_area);
+        frame.render_widget(block, block_area);
+        let para = Paragraph::new(text).wrap(Wrap { trim: true });
+        frame.render_widget(para, inner);
+    }
+
+    fn draw_share_overlay(&mut self, frame: &mut Frame, msg: &str) {
+        let area = frame.area();
+        let block_area = centered_rect(area, 70, 30);
+        frame.render_widget(Clear, block_area);
+        let block = Block::bordered()
+            .title(" Log Paylaş ")
+            .border_style(self.border_style())
+            .style(self.accent_style());
+        let inner = block.inner(block_area);
+        frame.render_widget(block, block_area);
+        let para = Paragraph::new(msg).wrap(Wrap { trim: true });
+        frame.render_widget(para, inner);
     }
 
     fn draw_settings(&mut self, frame: &mut Frame) {
@@ -336,6 +402,30 @@ impl App {
     }
 
     fn on_key_event(&mut self, key: KeyEvent) {
+        if self.share_message.is_some() {
+            self.share_message = None;
+            return;
+        }
+        if self.show_share_confirm {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char('E') => {
+                    self.show_share_confirm = false;
+                    self.pending_share = true;
+                }
+                KeyCode::Left | KeyCode::Char('p') | KeyCode::Char('P') => {
+                    self.share_is_public = false;
+                }
+                KeyCode::Right | KeyCode::Char('u') | KeyCode::Char('U') => {
+                    self.share_is_public = true;
+                }
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q')
+                | KeyCode::Char('h') | KeyCode::Char('H') => {
+                    self.show_share_confirm = false;
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.show_settings {
             self.on_key_settings(key);
             return;
@@ -561,6 +651,15 @@ impl App {
             (_, KeyCode::Char('s') | KeyCode::Char('S')) => {
                 self.show_settings = true;
                 self.settings_list_state.select(Some(0));
+            }
+            (_, KeyCode::Char('p') | KeyCode::Char('P')) => {
+                if login::load_token().is_none() {
+                    self.share_message = Some(
+                        "Önce giriş yapın: ratlog login\n\n(Herhangi bir tuşa basın)".to_string(),
+                    );
+                } else {
+                    self.show_share_confirm = true;
+                }
             }
             (_, KeyCode::Char('/')) | (KeyModifiers::CONTROL, KeyCode::Char('f')) => {
                 self.focus = Focus::Filter;

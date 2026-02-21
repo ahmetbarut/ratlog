@@ -7,26 +7,34 @@ mod app;
 mod cli;
 mod constants;
 mod logs;
+mod login;
 mod settings;
 mod theme;
 mod util;
 
 use std::env;
-use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let file_arg: Option<PathBuf> = cli::parse_args(&args);
+    let action = cli::parse_args(&args);
 
-    color_eyre::install()?;
-    let terminal = ratatui::init();
-    let (logs, file_path, file_offset, file_line_start) = logs::load_logs(file_arg)?;
-    let result = app::App::new(logs, file_path, file_offset, file_line_start)
-        .run(terminal)
-        .await;
-    ratatui::restore();
-    result
+    match action {
+        cli::CliAction::Login => {
+            color_eyre::install()?;
+            login::run().await
+        }
+        cli::CliAction::Run(file_arg) => {
+            color_eyre::install()?;
+            let terminal = ratatui::init();
+            let (logs, file_path, file_offset, file_line_start) = logs::load_logs(file_arg)?;
+            let result = app::App::new(logs, file_path, file_offset, file_line_start)
+                .run(terminal)
+                .await;
+            ratatui::restore();
+            result
+        }
+    }
 }
 
 #[cfg(test)]

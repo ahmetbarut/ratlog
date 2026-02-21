@@ -6,6 +6,12 @@ use crate::constants::MAX_LINES;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[derive(Debug)]
+pub enum CliAction {
+    Run(Option<PathBuf>),
+    Login,
+}
+
 pub fn print_version() {
     println!("ratlog {}", VERSION);
 }
@@ -16,9 +22,13 @@ pub fn print_help() {
 
 USAGE:
     ratlog [OPTIONS] [LOG_FILE]
+    ratlog login
 
 ARGUMENTS:
     LOG_FILE    Log file to open (last {} lines shown). If omitted, sample logs are used.
+
+COMMANDS:
+    login       Log in to Ratlog Web (opens browser, saves token for log sharing)
 
 OPTIONS:
     -h, --help      Show this message and exit
@@ -28,6 +38,7 @@ CONTROLS (in app):
     / or Tab or Ctrl+F   Focus filter
     S                    Settings (colours)
     L or F               Toggle live mode (when viewing a file)
+    P                    Share logs to Ratlog Web (requires login)
     g / G                Go to first / last line
     q or Ctrl+C          Quit
 
@@ -37,8 +48,8 @@ https://github.com/ahmetbarut/ratlog
     );
 }
 
-/// Parse args: exits with 0 for -h/--version; otherwise returns optional log file path (None = use sample logs).
-pub fn parse_args(args: &[String]) -> Option<PathBuf> {
+/// Parse args: exits with 0 for -h/--version; otherwise returns CliAction.
+pub fn parse_args(args: &[String]) -> CliAction {
     if args.iter().skip(1).any(|a| a == "-h" || a == "--help") {
         print_help();
         std::process::exit(0);
@@ -47,8 +58,16 @@ pub fn parse_args(args: &[String]) -> Option<PathBuf> {
         print_version();
         std::process::exit(0);
     }
-    args.iter()
+    let positional: Vec<&String> = args
+        .iter()
         .skip(1)
-        .find(|a| *a != "-h" && *a != "--help" && *a != "-V" && *a != "--version")
-        .map(|s| PathBuf::from(s.as_str()))
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+    if positional.first().map(|s| s.as_str()) == Some("login") {
+        return CliAction::Login;
+    }
+    let file_arg = positional
+        .first()
+        .map(|s| PathBuf::from(s.as_str()));
+    CliAction::Run(file_arg)
 }
