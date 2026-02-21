@@ -16,8 +16,8 @@ use ratatui::{
 };
 
 use crate::constants::{MAX_LINES, POLL_READ_CAP};
-use crate::logs::apply_filter;
 use crate::login;
+use crate::logs::apply_filter;
 use crate::settings::{load_settings, save_settings};
 use crate::theme::{self, AccentColor, BorderColor, Focus, StatusColor, TextColor, TextStyle};
 use crate::util::{centered_rect, current_process_memory};
@@ -180,8 +180,10 @@ impl App {
                 match login::share_log(&content, is_public).await {
                     Ok(res) => {
                         let url = res.view_url.as_deref().unwrap_or(&res.url);
-                        self.share_message =
-                            Some(format!("Paylaşıldı!\n\n{}\n\n(Herhangi bir tuşa basın)", url));
+                        self.share_message = Some(format!(
+                            "Paylaşıldı!\n\n{}\n\n(Herhangi bir tuşa basın)",
+                            url
+                        ));
                     }
                     Err(e) => {
                         self.share_message =
@@ -296,7 +298,11 @@ impl App {
         let area = frame.area();
         let block_area = centered_rect(area, 56, 16);
         frame.render_widget(Clear, block_area);
-        let visibility = if self.share_is_public { "Public" } else { "Private" };
+        let visibility = if self.share_is_public {
+            "Public"
+        } else {
+            "Private"
+        };
         let text = format!(
             "Logları Ratlog Web'e paylaşmak istiyor musunuz?\n\n  Görünürlük: {}  (←/→ veya P/U)\n\n  [E]vet (Enter)   [H]ayır (Esc)",
             visibility
@@ -418,8 +424,11 @@ impl App {
                 KeyCode::Right | KeyCode::Char('u') | KeyCode::Char('U') => {
                     self.share_is_public = true;
                 }
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q')
-                | KeyCode::Char('h') | KeyCode::Char('H') => {
+                KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q')
+                | KeyCode::Char('h')
+                | KeyCode::Char('H') => {
                     self.show_share_confirm = false;
                 }
                 _ => {}

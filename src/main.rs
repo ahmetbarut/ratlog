@@ -6,8 +6,8 @@
 mod app;
 mod cli;
 mod constants;
-mod logs;
 mod login;
+mod logs;
 mod settings;
 mod theme;
 mod util;

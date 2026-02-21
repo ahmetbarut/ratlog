@@ -66,8 +66,6 @@ pub fn parse_args(args: &[String]) -> CliAction {
     if positional.first().map(|s| s.as_str()) == Some("login") {
         return CliAction::Login;
     }
-    let file_arg = positional
-        .first()
-        .map(|s| PathBuf::from(s.as_str()));
+    let file_arg = positional.first().map(|s| PathBuf::from(s.as_str()));
     CliAction::Run(file_arg)
 }
